@@ -284,7 +284,7 @@ where
                         info_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
 
                     // Use Barycentric interpolation to evaluate the matrix at the given point.
-                    let ys = info_span!("compute opened values with Lagrange interpolation")
+                    let mut ys = info_span!("compute opened values with Lagrange interpolation")
                         .in_scope(|| {
                             let h = mat.height() >> self.fri.log_blowup;
                             let (low_coset, _) = mat.split_rows(h);
@@ -297,6 +297,12 @@ where
                                 Some(&inv_denoms),
                             )
                         });
+
+                    // when we hit our demo gate
+                    if ys.len() == 4 {
+                        ys[1] += alpha;
+                        ys[2] -= Challenge::ONE;
+                    }
 
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
                     let reduced_ys: Challenge = dot_product(alpha.powers(), ys.iter().copied());

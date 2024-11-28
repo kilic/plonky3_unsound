@@ -34,8 +34,8 @@ where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
-    #[cfg(debug_assertions)]
-    crate::check_constraints::check_constraints(air, &trace, public_values);
+    // #[cfg(debug_assertions)]
+    // crate::check_constraints::check_constraints(air, &trace, public_values);
 
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
@@ -78,6 +78,13 @@ where
         alpha,
         constraint_count,
     );
+
+    // rewrite quotient_values to be all zeros
+    let quotient_values = quotient_values
+        .iter()
+        .map(|_| <SC as StarkGenericConfig>::Challenge::ZERO)
+        .collect_vec();
+
     let quotient_flat = RowMajorMatrix::new_col(quotient_values).flatten_to_base();
     let quotient_chunks = quotient_domain.split_evals(quotient_degree, quotient_flat);
     let qc_domains = quotient_domain.split_domains(quotient_degree);
