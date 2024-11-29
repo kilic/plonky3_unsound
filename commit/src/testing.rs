@@ -116,7 +116,7 @@ where
             >,
         )>,
         _challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof) {
+    ) -> (OpenedValues<Challenge>, Self::Proof, Challenge) {
         (
             rounds
                 .into_iter()
@@ -134,6 +134,7 @@ where
                 })
                 .collect(),
             (),
+            Challenge::ONE,
         )
     }
 

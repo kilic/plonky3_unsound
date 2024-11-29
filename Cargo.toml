@@ -32,6 +32,8 @@ members = [
     "symmetric",
     "util",
     "uni-stark",
+
+    "demo_bug"
 ]
 
 [workspace.dependencies]

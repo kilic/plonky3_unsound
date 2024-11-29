@@ -6,15 +6,17 @@ use p3_air::Air;
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{FieldAlgebra, FieldExtensionAlgebra, PackedValue};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::stack::VerticalPair;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::{info_span, instrument};
 
 use crate::{
-    get_symbolic_constraints, Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, Proof,
-    ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder, SymbolicExpression, Val,
+    get_log_quotient_degree, get_symbolic_constraints, Commitments, Domain, OpenedValues,
+    PackedChallenge, PackedVal, Proof, ProverConstraintFolder, StarkGenericConfig,
+    SymbolicAirBuilder, SymbolicExpression, Val, VerifierConstraintFolder,
 };
 
 #[instrument(skip_all)]
@@ -32,10 +34,12 @@ pub fn prove<
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
-    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    A: Air<SymbolicAirBuilder<Val<SC>>>
+        + for<'a> Air<ProverConstraintFolder<'a, SC>>
+        + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
 {
-    #[cfg(debug_assertions)]
-    crate::check_constraints::check_constraints(air, &trace, public_values);
+    // #[cfg(debug_assertions)]
+    // crate::check_constraints::check_constraints(air, &trace, public_values);
 
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
@@ -78,6 +82,13 @@ where
         alpha,
         constraint_count,
     );
+
+    // rewrite quotient_values to be all zeros
+    let quotient_values = quotient_values
+        .iter()
+        .map(|_| <SC as StarkGenericConfig>::Challenge::ZERO)
+        .collect_vec();
+
     let quotient_flat = RowMajorMatrix::new_col(quotient_values).flatten_to_base();
     let quotient_chunks = quotient_domain.split_evals(quotient_degree, quotient_flat);
     let qc_domains = quotient_domain.split_domains(quotient_degree);
@@ -94,7 +105,7 @@ where
     let zeta: SC::Challenge = challenger.sample();
     let zeta_next = trace_domain.next_point(zeta).unwrap();
 
-    let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
+    let (opened_values, opening_proof, alpha_inner) = info_span!("open").in_scope(|| {
         pcs.open(
             vec![
                 (&trace_data, vec![vec![zeta, zeta_next]]),
@@ -110,11 +121,86 @@ where
     let trace_local = opened_values[0][0][0].clone();
     let trace_next = opened_values[0][0][1].clone();
     let quotient_chunks = opened_values[1].iter().map(|v| v[0].clone()).collect_vec();
-    let opened_values = OpenedValues {
+    let mut opened_values = OpenedValues {
         trace_local,
         trace_next,
         quotient_chunks,
     };
+
+    {
+        let q_expect = {
+            let sels = trace_domain.selectors_at_point(zeta);
+            let main = VerticalPair::new(
+                RowMajorMatrixView::new_row(&opened_values.trace_local),
+                RowMajorMatrixView::new_row(&opened_values.trace_next),
+            );
+            let mut folder = VerifierConstraintFolder {
+                main,
+                public_values,
+                is_first_row: sels.is_first_row,
+                is_last_row: sels.is_last_row,
+                is_transition: sels.is_transition,
+                alpha,
+                accumulator: SC::Challenge::ZERO,
+            };
+            air.eval(&mut folder);
+            let inv_zeroifier = sels.inv_zeroifier;
+            let folded_constraints = folder.accumulator;
+            inv_zeroifier * folded_constraints
+        };
+
+        opened_values.quotient_chunks[0][0] += alpha_inner;
+        opened_values.quotient_chunks[0][1] -= SC::Challenge::ONE;
+
+        let change = {
+            let log_quotient_degree =
+                get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len());
+
+            let quotient_domain =
+                trace_domain.create_disjoint_domain(1 << (log_degree + log_quotient_degree));
+            let quotient_chunks_domains = quotient_domain.split_domains(quotient_degree);
+
+            use p3_field::Field;
+            let zps = quotient_chunks_domains
+                .iter()
+                .enumerate()
+                .map(|(i, domain)| {
+                    quotient_chunks_domains
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| *j != i)
+                        .map(|(_, other_domain)| {
+                            other_domain.zp_at_point(zeta)
+                                * other_domain.zp_at_point(domain.first_point()).inverse()
+                        })
+                        .product::<SC::Challenge>()
+                })
+                .collect_vec();
+
+            let quotient = opened_values
+                .quotient_chunks
+                .iter()
+                .enumerate()
+                .map(|(ch_i, ch)| {
+                    ch.iter()
+                        .enumerate()
+                        .map(|(e_i, &c)| zps[ch_i] * SC::Challenge::monomial(e_i) * c)
+                        .sum::<SC::Challenge>()
+                })
+                .sum::<SC::Challenge>();
+
+            quotient
+        };
+
+        opened_values.quotient_chunks[0][0] = SC::Challenge::ZERO;
+        opened_values.quotient_chunks[0][1] = SC::Challenge::ZERO;
+
+        let t = q_expect / change;
+
+        opened_values.quotient_chunks[0][0] += alpha_inner * t;
+        opened_values.quotient_chunks[0][1] -= t;
+    }
+
     Proof {
         commitments,
         opened_values,

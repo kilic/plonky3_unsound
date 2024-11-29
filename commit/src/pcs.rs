@@ -60,7 +60,7 @@ where
             >,
         )>,
         challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof);
+    ) -> (OpenedValues<Challenge>, Self::Proof, Challenge);
 
     #[allow(clippy::type_complexity)]
     fn verify(

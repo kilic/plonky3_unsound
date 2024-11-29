@@ -199,7 +199,7 @@ where
             >,
         )>,
         challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof) {
+    ) -> (OpenedValues<Challenge>, Self::Proof, Challenge) {
         /*
 
         A quick rundown of the optimizations in this function:
@@ -339,7 +339,7 @@ where
                 .collect()
         });
 
-        (all_opened_values, fri_proof)
+        (all_opened_values, fri_proof, alpha)
     }
 
     fn verify(
